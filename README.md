@@ -135,3 +135,4 @@ Slack channel: [#open-cluster-mgmt](https://kubernetes.slack.com/channels/open-c
 ## License
 
 This code is released under the Apache 2.0 license. See the file [LICENSE](LICENSE) for more information.
+
