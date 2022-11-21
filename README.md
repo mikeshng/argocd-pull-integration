@@ -1,4 +1,6 @@
 # ArgoCD Application Pull Controller
+# This repo has been migrated to https://github.com/open-cluster-management-io/argocd-pull-integration
+
 Experimental ArgoCD Application controller that uses the hub-spoke pattern or pull model mechanism for decentralized resource delivery to the remote clusters.
 By using the [Open Cluster Management (OCM)](https://open-cluster-management.io/) APIs and components, 
 the ArgoCD Applications will be pull from the multi-cluster control plane hub cluster down to 
