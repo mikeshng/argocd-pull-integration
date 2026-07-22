@@ -215,6 +215,65 @@ spec:
 
 For detailed information about argocd-agent modes and configuration options, see the [argocd-agent Documentation](https://argocd-agent.readthedocs.io/).
 
+## Advanced Configuration
+
+### Adopting a Pre-Existing Hub Argo CD
+
+By default, the `argocd-agent-addon` chart installs its own argocd-operator and hub `ArgoCD` CR. If you already run an argocd-operator-managed Argo CD instance on the hub (with `spec.argoCDAgent.principal.enabled: true`), you can adopt it instead of installing a second one:
+
+```bash
+helm install argocd-agent-addon ocm/argocd-agent-addon \
+  --namespace argocd \
+  --set hubArgoCD.enabled=false
+```
+
+With `hubArgoCD.enabled=false`, the chart still installs the `GitOpsCluster` controller, placement, and `ClusterManagementAddOn` - it just skips installing argocd-operator and the hub `ArgoCD` CR, relying on the existing instance for principal service discovery.
+
+### Keeping argocd-agent Versions in Sync
+
+The argocd-agent principal (hub) and agent (managed cluster) must run matching versions - a version mismatch fails the connection with `Auth failure: agent version is required`. By default, the hub principal's image is set via the chart's `argoCDAgent.image` value (`quay.io/argoprojlabs/argocd-agent:v0.9.0`), and the `GitOpsCluster` controller automatically reads whatever the hub principal's `ArgoCD` CR currently has at `spec.argoCDAgent.principal.image` and applies the same value to each managed cluster's generated `ArgoCD` CR - fresh on every reconcile, so a version bump made through the chart (`helm upgrade --set argoCDAgent.image=...`) keeps every managed cluster's agent in step automatically, without a separate field to maintain. See [Lifecycle & Upgrades](#lifecycle--upgrades) below for what "automatically" actually depends on.
+
+To stop this auto-sync for a `GitOpsCluster` (e.g. to pin agent versions independently while validating a hub upgrade), annotate it:
+
+```bash
+kubectl annotate gitopscluster <name> -n <namespace> \
+  apps.open-cluster-management.io/disable-agent-image-sync=true
+```
+
+This applies to every managed cluster selected by that `GitOpsCluster`'s placement (all-or-nothing - there's no per-cluster override). With sync disabled, the generated `ArgoCD` CR omits `spec.argoCDAgent.agent.image`, so the managed cluster falls back to whatever image argocd-operator itself defaults to. Remove the annotation (`kubectl annotate gitopscluster <name> -n <namespace> apps.open-cluster-management.io/disable-agent-image-sync-`) to resume following the hub principal. This has no effect if you're supplying a fully custom `ArgoCD` CR via `spec.argoCDAgentAddon.argoCDCRManifestWork` - in that case you already control `spec.argoCDAgent.agent.image` directly in your own manifest.
+
+### Autonomous Mode
+
+`spec.argoCDAgentAddon.mode` can be `managed` (default - Applications are authored on the hub and pushed down) or `autonomous` (the managed cluster owns its Application configuration directly; the agent transmits changes up to the principal for observability). A few things behave differently in autonomous mode:
+
+- **No `destinationBasedMapping`**: argocd-agent rejects `destinationBasedMapping` outright for autonomous agents, so the generated `ArgoCD` CR omits it in this mode.
+- **AppProjects must exist locally**: the managed/workload cluster doesn't run argocd-server in autonomous mode (the control-plane hub still does, and is used to observe agents and trigger sync/terminate), and there's no hub-to-spoke configuration push, so an `AppProject` (e.g. `default`) must already exist on the managed cluster before an `Application` there can be reconciled. In a real deployment this is expected to be provisioned via GitOps/app-of-apps, per upstream argocd-agent's guidance that "Argo CD configuration management must be externalized."
+- **Applications are mirrored into a per-cluster namespace on the hub, read-only for configuration**: an `Application` created directly on managed cluster `cluster1` shows up on the hub in namespace `cluster1` (named after the `ManagedCluster`), not in the shared Argo CD namespace used by managed mode. The hub can't modify that Application's spec (git source, parameters, sync policy, etc.) - such edits are reverted to match the agent's version - but sync and terminate operations can still be triggered from the hub and are forwarded to the agent.
+
+## Lifecycle & Upgrades
+
+This covers what happens to each moving part when you run `helm upgrade` on the `argocd-agent-addon` release.
+
+### Spoke controller/addon binary (every release)
+
+The `argocd-pull-integration` controller image (`.Values.image`/`.Values.tag`) is bumped like any other Deployment - a normal rolling update on the hub, nothing addon-specific. The **managed-cluster side** follows automatically: the `GitOpsCluster` controller reads its own running pod's `CONTROLLER_IMAGE` env var (set from the same `image`/`tag` values) and writes it into an `AddOnTemplate` on every reconcile (`internal/controller/addon_template_management.go`). OCM's addon-framework propagates that `AddOnTemplate` change to each managed cluster via `ManifestWork`, and the work-agent there rolls the addon Deployment to the new image. `helm upgrade --set tag=<new>` on the hub is therefore sufficient on its own - no separate action is needed on any managed cluster.
+
+### Hub Argo CD / argocd-agent version (when `hubArgoCD.enabled: true`, the default)
+
+`helm upgrade --set argoCDAgent.image=<new>` updates the hub `ArgoCD` CR's `principal.image` directly (a normal Helm-managed resource). The hub `GitOpsCluster` resource also carries an annotation derived from that same value (`apps.open-cluster-management.io/hub-argocd-agent-image`, `charts/argocd-agent-addon/templates/gitopscluster/gitopscluster.yaml`), purely so that changing `argoCDAgent.image` also changes the `GitOpsCluster`'s own rendered content. This matters because the controller only watches the `GitOpsCluster` resource itself (plus `PlacementDecision`) - it does **not** watch the `ArgoCD` CR, and Helm re-applying an otherwise-unchanged `GitOpsCluster` manifest doesn't generate a Kubernetes watch event on its own. Without that annotation, a `helm upgrade` that only touches `argoCDAgent.image` would never cause a reconcile, so the new principal image would never get discovered or propagated. With it, `helm upgrade --set argoCDAgent.image=<new>` alone is sufficient: the hub principal rolls to the new image, and every managed cluster's agent follows automatically on the next reconcile.
+
+### Hub Argo CD version (when `hubArgoCD.enabled: false`, adopting an existing instance)
+
+The chart never touches the pre-existing Argo CD/argocd-operator install in this mode, so its lifecycle is entirely up to whoever manages it - a `helm upgrade` of this release (e.g. bumping the controller's own image tag) leaves the externally-managed operator Deployment and `ArgoCD` CR untouched.
+
+The flip side: the chart still renders the `hub-argocd-agent-image` annotation described above whenever `argoCDAgent.image` is set - including with `hubArgoCD.enabled: false` - since that template logic doesn't check `hubArgoCD.enabled`. But the annotation only *changes* (and so only triggers a reconcile) when `argoCDAgent.image` changes through a `helm upgrade` of this release. A principal image change made directly against the adopted instance - by its own operator/owner, outside this chart entirely - never touches that Helm value, so the annotation stays put and no reconcile fires, and the change does not propagate to managed clusters on its own. Force a resync by touching the `GitOpsCluster` object after such an external change:
+
+```bash
+kubectl annotate gitopscluster <name> -n <namespace> force-sync="$(date +%s)" --overwrite
+```
+
+This triggers a reconcile, which re-discovers the current principal image and propagates it to every managed cluster.
+
 ## Development
 
 See [CONTRIBUTING.md](CONTRIBUTING.md) for development guidelines.

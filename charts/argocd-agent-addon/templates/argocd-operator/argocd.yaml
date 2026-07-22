@@ -1,3 +1,4 @@
+{{- if .Values.hubArgoCD.enabled }}
 apiVersion: argoproj.io/v1beta1
 kind: ArgoCD
 metadata:
@@ -11,6 +12,9 @@ spec:
   argoCDAgent:
     principal:
       enabled: true
+      {{- if .Values.argoCDAgent.image }}
+      image: {{ .Values.argoCDAgent.image }}
+      {{- end }}
       destinationBasedMapping: true
       auth: "mtls:CN=system:open-cluster-management:cluster:([^:]+):addon:argocd-agent-addon:agent:argocd-agent-addon-agent"
       server:
@@ -35,3 +39,4 @@ spec:
         rootCASecretName: "argocd-agent-ca"
   sourceNamespaces:
     - "*"
+{{- end }}

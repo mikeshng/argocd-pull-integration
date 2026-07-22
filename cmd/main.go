@@ -70,10 +70,6 @@ var (
 		LeaderElectionRenewDeadline: 10 * time.Second,
 		LeaderElectionRetryPeriod:   2 * time.Second,
 	}
-
-	ArgoCDAgentServerAddress = ""
-	ArgoCDAgentServerPort    = ""
-	ArgoCDAgentMode          = "managed"
 )
 
 var (
@@ -264,27 +260,12 @@ func runAddonMode() {
 		klog.Info("LeaderElection disabled as not running in a cluster")
 	}
 
-	if newArgoCDAgentServerAddress, found := os.LookupEnv("ARGOCD_AGENT_SERVER_ADDRESS"); found && newArgoCDAgentServerAddress != "" {
-		ArgoCDAgentServerAddress = newArgoCDAgentServerAddress
-	}
-
-	if newArgoCDAgentServerPort, found := os.LookupEnv("ARGOCD_AGENT_SERVER_PORT"); found && newArgoCDAgentServerPort != "" {
-		ArgoCDAgentServerPort = newArgoCDAgentServerPort
-	}
-
-	if newArgoCDAgentMode, found := os.LookupEnv("ARGOCD_AGENT_MODE"); found && newArgoCDAgentMode != "" {
-		ArgoCDAgentMode = newArgoCDAgentMode
-	}
-
 	setupLog.Info("Addon mode settings",
 		"syncInterval", addonOptions.SyncInterval,
 		"leaseDuration", addonOptions.LeaderElectionLeaseDuration,
 		"renewDeadline", addonOptions.LeaderElectionRenewDeadline,
 		"retryPeriod", addonOptions.LeaderElectionRetryPeriod,
 		"operatorImage", operatorImage,
-		"ArgoCDAgentServerAddress", ArgoCDAgentServerAddress,
-		"ArgoCDAgentServerPort", ArgoCDAgentServerPort,
-		"ArgoCDAgentMode", ArgoCDAgentMode,
 	)
 
 	mgr, err := ctrl.NewManager(ctrl.GetConfigOrDie(), ctrl.Options{
@@ -303,8 +284,7 @@ func runAddonMode() {
 		os.Exit(1)
 	}
 
-	if err = addon.SetupWithManager(mgr, addonOptions.SyncInterval,
-		operatorImage, ArgoCDAgentServerAddress, ArgoCDAgentServerPort, ArgoCDAgentMode); err != nil {
+	if err = addon.SetupWithManager(mgr, addonOptions.SyncInterval, operatorImage); err != nil {
 		setupLog.Error(err, "unable to create addon controller")
 		os.Exit(1)
 	}

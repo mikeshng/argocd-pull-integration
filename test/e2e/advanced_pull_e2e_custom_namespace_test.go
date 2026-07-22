@@ -498,7 +498,7 @@ spec:
 			Eventually(func(g Gomega) {
 				cmd := exec.Command("kubectl", "--context", cluster1Context,
 					"get", "application", appName,
-					"-n", hubArgoCDNamespace,
+					"-n", spokeArgoCDNamespace,
 					"-o", "jsonpath={.metadata.name}")
 				output, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred())
@@ -509,7 +509,7 @@ spec:
 			Eventually(func(g Gomega) {
 				cmd := exec.Command("kubectl", "--context", cluster1Context,
 					"get", "application", appName,
-					"-n", hubArgoCDNamespace,
+					"-n", spokeArgoCDNamespace,
 					"-o", "jsonpath={.status.sync.status}")
 				output, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred())
@@ -520,7 +520,7 @@ spec:
 			Eventually(func(g Gomega) {
 				cmd := exec.Command("kubectl", "--context", cluster1Context,
 					"get", "application", appName,
-					"-n", hubArgoCDNamespace,
+					"-n", spokeArgoCDNamespace,
 					"-o", "jsonpath={.status.health.status}")
 				output, err := utils.Run(cmd)
 				g.Expect(err).NotTo(HaveOccurred())

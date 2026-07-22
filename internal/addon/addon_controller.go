@@ -31,26 +31,26 @@ import (
 	"sigs.k8s.io/controller-runtime/pkg/manager"
 )
 
+// The "all:" prefix is required so files starting with "_" (e.g. the Helm partial
+// _operator-manifests.tpl) are embedded too - go:embed silently skips "_"/"."-prefixed
+// files otherwise.
+//
 //nolint:all
-//go:embed charts/argocd-agent-addon/**
+//go:embed all:charts/argocd-agent-addon
 var ChartFS embed.FS
 
 // ArgoCDAgentAddonReconciler reconciles an ArgoCD agent addon
 type ArgoCDAgentAddonReconciler struct {
 	client.Client
-	Scheme                   *runtime.Scheme
-	Config                   *rest.Config
-	Interval                 int
-	OperatorImage            string
-	ArgoCDAgentServerAddress string
-	ArgoCDAgentServerPort    string
-	ArgoCDAgentMode          string
+	Scheme        *runtime.Scheme
+	Config        *rest.Config
+	Interval      int
+	OperatorImage string
 }
 
 // SetupWithManager sets up the addon with the Manager.
 // Returns an error if operatorImage is empty or unparseable.
-func SetupWithManager(mgr manager.Manager, interval int,
-	operatorImage, argoCDAgentServerAddress, argoCDAgentServerPort, argoCDAgentMode string) error {
+func SetupWithManager(mgr manager.Manager, interval int, operatorImage string) error {
 	if operatorImage == "" {
 		return fmt.Errorf("operatorImage must not be empty (set via Makefile ARGOCD_OPERATOR_IMAGE / ldflags)")
 	}
@@ -59,14 +59,11 @@ func SetupWithManager(mgr manager.Manager, interval int,
 	}
 
 	reconciler := &ArgoCDAgentAddonReconciler{
-		Client:                   mgr.GetClient(),
-		Scheme:                   mgr.GetScheme(),
-		Config:                   mgr.GetConfig(),
-		Interval:                 interval,
-		OperatorImage:            operatorImage,
-		ArgoCDAgentServerAddress: argoCDAgentServerAddress,
-		ArgoCDAgentServerPort:    argoCDAgentServerPort,
-		ArgoCDAgentMode:          argoCDAgentMode,
+		Client:        mgr.GetClient(),
+		Scheme:        mgr.GetScheme(),
+		Config:        mgr.GetConfig(),
+		Interval:      interval,
+		OperatorImage: operatorImage,
 	}
 
 	return mgr.Add(reconciler)

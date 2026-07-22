@@ -67,16 +67,16 @@ generate: controller-gen ## Generate code containing DeepCopy, DeepCopyInto, and
 	$(CONTROLLER_GEN) object:headerFile="hack/boilerplate.go.txt" paths="./api/..." paths="./internal/controller/..."
 
 .PHONY: sync-operator-chart
-sync-operator-chart: ## Copy embedded operator chart to hub chart (single source of truth)
-	@echo "Syncing operator chart from embedded chart to hub chart..."
-	cp internal/addon/charts/argocd-agent-addon/templates/operator.yaml \
-		charts/argocd-agent-addon/templates/argocd-operator/operator.yaml
-	@echo "Operator chart synced successfully"
+sync-operator-chart: ## Copy embedded operator manifests partial to hub chart (single source of truth)
+	@echo "Syncing operator manifests from embedded chart to hub chart..."
+	cp internal/addon/charts/argocd-agent-addon/templates/_operator-manifests.tpl \
+		charts/argocd-agent-addon/templates/argocd-operator/_operator-manifests.tpl
+	@echo "Operator manifests synced successfully"
 
 .PHONY: verify-operator-chart-sync
-verify-operator-chart-sync: ## Verify hub operator chart matches embedded chart
-	@diff -q internal/addon/charts/argocd-agent-addon/templates/operator.yaml \
-		charts/argocd-agent-addon/templates/argocd-operator/operator.yaml \
+verify-operator-chart-sync: ## Verify hub operator manifests partial matches embedded chart
+	@diff -q internal/addon/charts/argocd-agent-addon/templates/_operator-manifests.tpl \
+		charts/argocd-agent-addon/templates/argocd-operator/_operator-manifests.tpl \
 		>/dev/null 2>&1 \
 		|| { echo "ERROR: operator charts are out of sync. Run 'make sync-operator-chart'."; exit 1; }
 
@@ -140,9 +140,101 @@ test-e2e-advanced-pull: manifests generate fmt vet ## Run advanced pull model e2
 		svc/argocd-agent-principal -n argocd --timeout=120s || true
 	@echo ""
 	@echo "===== Running advanced pull model e2e tests ====="
-	go test -tags=e2e ./test/e2e/ -v -ginkgo.v --ginkgo.label-filter="advanced-pull"
+	go test -tags=e2e -timeout 20m ./test/e2e/ -v -ginkgo.v --ginkgo.label-filter="advanced-pull"
 	@echo ""
 	@echo "===== Advanced Pull E2E Tests Complete ====="
+
+.PHONY: test-e2e-advanced-pull-autonomous
+test-e2e-advanced-pull-autonomous: manifests generate fmt vet ## Run advanced pull model e2e tests in autonomous mode (assumes clusters exist)
+	@echo "===== Setting up OCM environment ====="
+	CLUSTERADM_VERSION=$(CLUSTERADM_VERSION) ./test/e2e/scripts/setup_ocm_env.sh
+	@echo ""
+	@echo "===== Installing addon via Helm (mode=autonomous) ====="
+	$(KUBECTL) config use-context kind-$(HUB_CLUSTER)
+	helm install argocd-agent-addon \
+		./charts/argocd-agent-addon \
+		--namespace argocd \
+		--create-namespace \
+		--set image=quay.io/open-cluster-management/argocd-pull-integration \
+		--set tag=latest \
+		--set principalServiceType=NodePort \
+		--set gitOpsCluster.mode=autonomous \
+		--wait \
+		--timeout 10m
+	@echo ""
+	@echo "===== Waiting for ArgoCD principal service ====="
+	$(KUBECTL) --context kind-$(HUB_CLUSTER) wait --for=jsonpath='{.spec.type}'=NodePort \
+		svc/argocd-agent-principal -n argocd --timeout=120s || true
+	@echo ""
+	@echo "===== Running advanced pull model autonomous mode e2e tests ====="
+	go test -tags=e2e -timeout 20m ./test/e2e/ -v -ginkgo.v --ginkgo.label-filter="advanced-pull-autonomous"
+	@echo ""
+	@echo "===== Advanced Pull Autonomous Mode E2E Tests Complete ====="
+
+.PHONY: test-e2e-advanced-pull-autonomous-local
+test-e2e-advanced-pull-autonomous-local: ## Complete advanced pull model autonomous mode e2e test with kind cluster setup
+	$(MAKE) setup-e2e-clusters
+	@echo ""
+	$(MAKE) test-e2e-advanced-pull-autonomous
+
+.PHONY: test-e2e-advanced-pull-existing-argocd
+test-e2e-advanced-pull-existing-argocd: manifests generate fmt vet ## Run advanced pull model e2e tests adopting a pre-existing hub ArgoCD (assumes clusters exist)
+	@echo "===== Setting up OCM environment ====="
+	CLUSTERADM_VERSION=$(CLUSTERADM_VERSION) ./test/e2e/scripts/setup_ocm_env.sh
+	@echo ""
+	@echo "===== Simulating a pre-existing hub ArgoCD install (argocd-operator + ArgoCD CR) ====="
+	$(KUBECTL) config use-context kind-$(HUB_CLUSTER)
+	$(KUBECTL) create namespace argocd --dry-run=client -o yaml | $(KUBECTL) apply -f -
+	$(KUBECTL) apply --server-side --force-conflicts -f charts/argocd-agent-addon/crds/
+	@# kubectl wait errors out immediately (instead of polling) if a freshly-created CRD's
+	@# .status.conditions is still nil rather than an empty list, so retry on top of it.
+	@for i in $$(seq 1 30); do \
+		$(KUBECTL) wait --for=condition=Established --timeout=10s \
+			crd/argocds.argoproj.io crd/gitopsclusters.apps.open-cluster-management.io \
+			&& exit 0; \
+		echo "Waiting for CRDs to establish (attempt $$i/30)..."; \
+		sleep 2; \
+	done; \
+	echo "ERROR: CRDs did not establish in time"; exit 1
+	helm template existing-argocd ./charts/argocd-agent-addon \
+		--namespace argocd \
+		--set principalServiceType=NodePort \
+		--show-only templates/argocd-operator/operator.yaml \
+		--show-only templates/argocd-operator/argocd.yaml \
+		| $(KUBECTL) apply -f -
+	$(KUBECTL) -n argocd-operator-system wait --for=condition=Available deployment/argocd-operator-controller-manager --timeout=180s
+	$(KUBECTL) -n argocd wait --for=jsonpath='{.status.phase}'=Running pod -l app.kubernetes.io/name=argocd-agent-principal --timeout=180s
+	@# Wait for the rest of the hub Argo CD stack too, not just the operator and principal -
+	@# the ApplicationSet -> Application -> sync flow this suite exercises also needs redis,
+	@# repo-server, and the applicationset-controller ready, which a raw `kubectl apply` (unlike
+	@# `helm install --wait`) does not wait for on its own.
+	$(KUBECTL) -n argocd wait --for=condition=Available deployment/argocd-redis deployment/argocd-repo-server deployment/argocd-applicationset-controller --timeout=180s
+	@echo ""
+	@echo "===== Installing addon chart with hubArgoCD.enabled=false (adopting the existing Argo CD) ====="
+	helm install argocd-agent-addon \
+		./charts/argocd-agent-addon \
+		--namespace argocd \
+		--set image=quay.io/open-cluster-management/argocd-pull-integration \
+		--set tag=latest \
+		--set principalServiceType=NodePort \
+		--set hubArgoCD.enabled=false \
+		--wait \
+		--timeout 10m
+	@echo ""
+	@echo "===== Waiting for ArgoCD principal service ====="
+	$(KUBECTL) --context kind-$(HUB_CLUSTER) wait --for=jsonpath='{.spec.type}'=NodePort \
+		svc/argocd-agent-principal -n argocd --timeout=120s || true
+	@echo ""
+	@echo "===== Running advanced pull model existing-ArgoCD e2e tests ====="
+	go test -tags=e2e -timeout 20m ./test/e2e/ -v -ginkgo.v --ginkgo.label-filter="advanced-pull-existing-argocd"
+	@echo ""
+	@echo "===== Advanced Pull Existing ArgoCD E2E Tests Complete ====="
+
+.PHONY: test-e2e-advanced-pull-existing-argocd-local
+test-e2e-advanced-pull-existing-argocd-local: ## Complete advanced pull model existing-ArgoCD e2e test with kind cluster setup
+	$(MAKE) setup-e2e-clusters
+	@echo ""
+	$(MAKE) test-e2e-advanced-pull-existing-argocd
 
 .PHONY: test-e2e-advanced-pull-local
 test-e2e-advanced-pull-local: ## Complete advanced pull model e2e test with kind cluster setup
@@ -179,7 +271,7 @@ test-e2e-advanced-pull-custom-namespace: manifests generate fmt vet ## Run advan
 	HUB_ARGOCD_OPERATOR_NAMESPACE=notargocd-operator-system \
 	SPOKE_ARGOCD_NAMESPACE=argocdnot \
 	SPOKE_ARGOCD_OPERATOR_NAMESPACE=argocdnot-operator-system \
-	go test -tags=e2e ./test/e2e/ -v -ginkgo.v --ginkgo.label-filter="advanced-pull-custom-namespace"
+	go test -tags=e2e -timeout 20m ./test/e2e/ -v -ginkgo.v --ginkgo.label-filter="advanced-pull-custom-namespace"
 	@echo ""
 	@echo "===== Advanced Pull Custom Namespace E2E Tests Complete ====="
 	@echo "Hub context: kind-$(HUB_CLUSTER) (ArgoCD: notargocd, Operator: notargocd-operator-system)"
@@ -224,7 +316,7 @@ test-e2e-basic-pull: manifests generate fmt vet ## Run e2e tests for basic pull 
 	@echo ""
 	@echo "===== Running e2e basic pull tests ====="
 	$(KUBECTL) config use-context kind-$(HUB_CLUSTER)
-	go test -tags=e2e ./test/e2e/ -v -ginkgo.v --ginkgo.label-filter="basic-pull"
+	go test -tags=e2e -timeout 20m ./test/e2e/ -v -ginkgo.v --ginkgo.label-filter="basic-pull"
 	@echo ""
 	@echo "===== Basic Pull E2E Tests Complete ====="
 	@echo "Hub context: kind-$(HUB_CLUSTER)"

@@ -6,6 +6,9 @@ on:
     branches:
       - main
 
+permissions:
+  contents: read
+
 env:
   # Common versions
   GO_VERSION: '1.26'
@@ -27,6 +30,7 @@ jobs:
         with:
           fetch-depth: 1
           path: go/src/open-cluster-management.io/argocd-pull-integration
+          persist-credentials: false
 
       - name: install Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -82,6 +86,7 @@ jobs:
         with:
           fetch-depth: 1
           path: go/src/open-cluster-management.io/argocd-pull-integration
+          persist-credentials: false
 
       - name: install Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
@@ -126,6 +131,114 @@ jobs:
           KUBECONFIG: /home/runner/.kube/config
         run: make test-e2e-advanced-pull-custom-namespace
 
+  e2e-advanced-pull-autonomous:
+    name: e2e-advanced-pull-autonomous
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 1
+          path: go/src/open-cluster-management.io/argocd-pull-integration
+          persist-credentials: false
+
+      - name: install Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Add GOPATH/bin to PATH
+        run: echo "$GOPATH/bin" >> "$GITHUB_PATH"
+
+      - name: install imagebuilder
+        run: go install github.com/openshift/imagebuilder/cmd/imagebuilder@v1.2.3
+
+      - name: Set up Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
+        with:
+          version: v3.15.2
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede # v4
+        with:
+          version: v1.29.0
+
+      - name: build-images
+        run: make build-images
+
+      - name: setup kind (cluster1)
+        run: kind create cluster --name cluster1 --image kindest/node:${{ env.KUBERNETES_VERSION }} --wait 300s
+
+      - name: setup kind (hub)
+        run: kind create cluster --name hub --image kindest/node:${{ env.KUBERNETES_VERSION }} --wait 300s
+
+      - name: Load image on the nodes of the hub
+        run: |
+          kind load docker-image --name=hub quay.io/open-cluster-management/argocd-pull-integration:latest
+
+      - name: Load image on the nodes of the cluster1
+        run: |
+          kind load docker-image --name=cluster1 quay.io/open-cluster-management/argocd-pull-integration:latest
+
+      - name: Run advanced pull autonomous mode e2e test
+        env:
+          KUBECONFIG: /home/runner/.kube/config
+        run: make test-e2e-advanced-pull-autonomous
+
+  e2e-advanced-pull-existing-argocd:
+    name: e2e-advanced-pull-existing-argocd
+    runs-on: ubuntu-latest
+    steps:
+      - name: checkout code
+        uses: actions/checkout@34e114876b0b11c390a56381ad16ebd13914f8d5 # v4
+        with:
+          fetch-depth: 1
+          path: go/src/open-cluster-management.io/argocd-pull-integration
+          persist-credentials: false
+
+      - name: install Go
+        uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+
+      - name: Add GOPATH/bin to PATH
+        run: echo "$GOPATH/bin" >> "$GITHUB_PATH"
+
+      - name: install imagebuilder
+        run: go install github.com/openshift/imagebuilder/cmd/imagebuilder@v1.2.3
+
+      - name: Set up Helm
+        uses: azure/setup-helm@1a275c3b69536ee54be43f2070a358922e12c8d4 # v4
+        with:
+          version: v3.15.2
+
+      - name: Set up kubectl
+        uses: azure/setup-kubectl@776406bce94f63e41d621b960d78ee25c8b76ede # v4
+        with:
+          version: v1.29.0
+
+      - name: build-images
+        run: make build-images
+
+      - name: setup kind (cluster1)
+        run: kind create cluster --name cluster1 --image kindest/node:${{ env.KUBERNETES_VERSION }} --wait 300s
+
+      - name: setup kind (hub)
+        run: kind create cluster --name hub --image kindest/node:${{ env.KUBERNETES_VERSION }} --wait 300s
+
+      - name: Load image on the nodes of the hub
+        run: |
+          kind load docker-image --name=hub quay.io/open-cluster-management/argocd-pull-integration:latest
+
+      - name: Load image on the nodes of the cluster1
+        run: |
+          kind load docker-image --name=cluster1 quay.io/open-cluster-management/argocd-pull-integration:latest
+
+      - name: Run advanced pull existing-ArgoCD e2e test
+        env:
+          KUBECONFIG: /home/runner/.kube/config
+        run: make test-e2e-advanced-pull-existing-argocd
+
   e2e-basic-pull:
     name: e2e-basic-pull
     runs-on: ubuntu-latest
@@ -135,6 +248,7 @@ jobs:
         with:
           fetch-depth: 1
           path: go/src/open-cluster-management.io/argocd-pull-integration
+          persist-credentials: false
 
       - name: install Go
         uses: actions/setup-go@40f1582b2485089dde7abd97c1529aa768e1baff # v5

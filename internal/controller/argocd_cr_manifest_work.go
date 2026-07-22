@@ -36,6 +36,14 @@ import (
 
 const (
 	ArgoCDCRManifestWorkPrefix = "argocd-agent-cr"
+
+	// AnnotationDisableAgentImageSync, when set to "true" on a GitOpsCluster, stops the
+	// controller from auto-discovering the hub principal's argocd-agent image and injecting it
+	// into the default-generated spoke ArgoCD CR. Applies to every managed cluster selected by
+	// that GitOpsCluster's placement (all-or-nothing - there is no per-cluster override). Has no
+	// effect when a custom ArgoCDCRManifestWork is supplied, since that path never calls
+	// buildDefaultArgoCDCR in the first place.
+	AnnotationDisableAgentImageSync = "apps.open-cluster-management.io/disable-agent-image-sync"
 )
 
 // getArgoCDCRManifestWorkName returns the ManifestWork name for the ArgoCD CR.
@@ -71,7 +79,8 @@ func (r *GitOpsClusterReconciler) createArgoCDCRManifestWork(
 	var manifests []workv1.Manifest
 
 	if gitOpsCluster.Spec.ArgoCDAgentAddon.ArgoCDCRManifestWork != nil {
-		// User-provided ArgoCD CR manifests - inject server address/port if not already set
+		// User-provided ArgoCD CR manifests - inject server address/port if not already set.
+		// The user fully controls the rest of the CR directly, including spec.argoCDAgent.agent.image.
 		for _, rawExt := range gitOpsCluster.Spec.ArgoCDAgentAddon.ArgoCDCRManifestWork.Manifests {
 			injectedRaw, err := injectServerEndpoint(rawExt.Raw, serverAddress, serverPort)
 			if err != nil {
@@ -85,7 +94,7 @@ func (r *GitOpsClusterReconciler) createArgoCDCRManifestWork(
 		}
 	} else {
 		// Auto-generate default ArgoCD CR
-		defaultCR := r.buildDefaultArgoCDCR(gitOpsCluster, spokeArgoCDNamespace, serverAddress, serverPort)
+		defaultCR := r.buildDefaultArgoCDCR(ctx, gitOpsCluster, spokeArgoCDNamespace, serverAddress, serverPort)
 		crJSON, err := json.Marshal(defaultCR)
 		if err != nil {
 			return fmt.Errorf("failed to marshal default ArgoCD CR: %w", err)
@@ -161,14 +170,31 @@ func (r *GitOpsClusterReconciler) createArgoCDCRManifestWork(
 	return nil
 }
 
-// buildDefaultArgoCDCR generates the default ArgoCD CR for agent mode
+// buildDefaultArgoCDCR generates the default ArgoCD CR for agent mode. The agent image is
+// read fresh from the hub ArgoCD CR's spec.argoCDAgent.principal.image (best-effort) so the
+// default agent always matches whatever version the hub principal is currently running,
+// without needing a duplicate field on the GitOpsCluster API.
 func (r *GitOpsClusterReconciler) buildDefaultArgoCDCR(
+	ctx context.Context,
 	gitOpsCluster *appsv1alpha1.GitOpsCluster,
 	spokeArgoCDNamespace, serverAddress, serverPort string) *unstructured.Unstructured {
 
 	mode := gitOpsCluster.Spec.ArgoCDAgentAddon.Mode
 	if mode == "" {
 		mode = "managed"
+	}
+
+	var agentImage string
+	if gitOpsCluster.Annotations[AnnotationDisableAgentImageSync] == "true" {
+		klog.V(2).InfoS("Agent image sync disabled via annotation, leaving spec.argoCDAgent.agent.image unset",
+			"namespace", gitOpsCluster.Namespace, "name", gitOpsCluster.Name)
+	} else {
+		var err error
+		agentImage, err = r.discoverPrincipalImage(ctx, gitOpsCluster.Namespace)
+		if err != nil || agentImage == "" {
+			klog.V(2).InfoS("No hub principal image found, leaving spec.argoCDAgent.agent.image unset",
+				"namespace", gitOpsCluster.Namespace, "error", err)
+		}
 	}
 
 	cr := &unstructured.Unstructured{
@@ -188,13 +214,9 @@ func (r *GitOpsClusterReconciler) buildDefaultArgoCDCR(
 					"agent": map[string]interface{}{
 						"enabled":           true,
 						"allowedNamespaces": []interface{}{"*"},
-						"destinationBasedMapping": map[string]interface{}{
-							"enabled":         true,
-							"createNamespace": true,
-						},
-						"creds":     "mtls:open-cluster-management:cluster:([^:]+):addon:argocd-agent",
-						"logLevel":  "info",
-						"logFormat": "text",
+						"creds":             "mtls:open-cluster-management:cluster:([^:]+):addon:argocd-agent",
+						"logLevel":          "info",
+						"logFormat":         "text",
 						"client": map[string]interface{}{
 							"principalServerAddress": serverAddress,
 							"principalServerPort":    serverPort,
@@ -215,6 +237,22 @@ func (r *GitOpsClusterReconciler) buildDefaultArgoCDCR(
 				},
 			},
 		},
+	}
+
+	if agentImage != "" {
+		_ = unstructured.SetNestedField(cr.Object, agentImage, "spec", "argoCDAgent", "agent", "image")
+	}
+
+	// destination-based mapping routes Applications to agents by spec.destination.name and is
+	// only meaningful in managed mode, where the hub decides which agent an Application belongs
+	// to. Autonomous agents own their own Applications locally, and argocd-agent rejects
+	// destination-based mapping outright for autonomous agents ("destination-based mapping is
+	// not supported for autonomous agents").
+	if mode != "autonomous" {
+		_ = unstructured.SetNestedMap(cr.Object, map[string]interface{}{
+			"enabled":         true,
+			"createNamespace": true,
+		}, "spec", "argoCDAgent", "agent", "destinationBasedMapping")
 	}
 
 	return cr
