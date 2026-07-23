@@ -245,18 +245,6 @@ func buildAddonManifests(addonImage string) []workv1.Manifest {
 										Args:            []string{"--mode=addon"},
 										Env: []corev1.EnvVar{
 											{
-												Name:  "ARGOCD_AGENT_SERVER_ADDRESS",
-												Value: "{{ARGOCD_AGENT_SERVER_ADDRESS}}",
-											},
-											{
-												Name:  "ARGOCD_AGENT_SERVER_PORT",
-												Value: "{{ARGOCD_AGENT_SERVER_PORT}}",
-											},
-											{
-												Name:  "ARGOCD_AGENT_MODE",
-												Value: "{{ARGOCD_AGENT_MODE}}",
-											},
-											{
 												Name:  "ARGOCD_NAMESPACE",
 												Value: "{{ARGOCD_NAMESPACE}}",
 											},

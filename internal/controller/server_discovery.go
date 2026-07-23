@@ -22,6 +22,10 @@ import (
 	"strconv"
 
 	corev1 "k8s.io/api/core/v1"
+	k8serrors "k8s.io/apimachinery/pkg/api/errors"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
+	"k8s.io/apimachinery/pkg/runtime/schema"
+	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/klog/v2"
 
 	appsv1alpha1 "open-cluster-management.io/argocd-pull-integration/api/v1alpha1"
@@ -137,6 +141,33 @@ func (r *GitOpsClusterReconciler) discoverServerAddressAndPort(
 
 	return "", "", fmt.Errorf("no external endpoint found for service %s in namespace %s (type=%s, no LoadBalancer ingress)",
 		service.Name, argoCDNamespace, service.Spec.Type)
+}
+
+// discoverPrincipalImage reads spec.argoCDAgent.principal.image from the hub ArgoCD CR named
+// "argocd" in argoCDNamespace. It is read fresh on every call (not cached on the GitOpsCluster
+// spec) so that the managed-cluster agent's default image always tracks whatever the hub
+// principal is currently running. An absent CR or unset field is not an error - the caller
+// treats it as "no override available" and falls back to the argocd-operator default.
+func (r *GitOpsClusterReconciler) discoverPrincipalImage(ctx context.Context, argoCDNamespace string) (string, error) {
+	argoCD := &unstructured.Unstructured{}
+	argoCD.SetGroupVersionKind(schema.GroupVersionKind{
+		Group:   "argoproj.io",
+		Version: "v1beta1",
+		Kind:    "ArgoCD",
+	})
+
+	if err := r.Get(ctx, types.NamespacedName{Name: "argocd", Namespace: argoCDNamespace}, argoCD); err != nil {
+		if k8serrors.IsNotFound(err) {
+			return "", nil
+		}
+		return "", err
+	}
+
+	image, found, err := unstructured.NestedString(argoCD.Object, "spec", "argoCDAgent", "principal", "image")
+	if err != nil || !found {
+		return "", err
+	}
+	return image, nil
 }
 
 // getNodeInternalIP returns the InternalIP of the first node in the cluster

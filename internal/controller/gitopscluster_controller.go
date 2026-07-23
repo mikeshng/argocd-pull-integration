@@ -64,6 +64,7 @@ type GitOpsClusterReconciler struct {
 // +kubebuilder:rbac:groups=cluster.open-cluster-management.io,resources=placementdecisions,verbs=get;list;watch
 // +kubebuilder:rbac:groups=apps,resources=deployments,verbs=get;list;watch
 // +kubebuilder:rbac:groups=work.open-cluster-management.io,resources=manifestworks,verbs=get;list;watch;create;update;patch;delete
+// +kubebuilder:rbac:groups=argoproj.io,resources=argocds,verbs=get;list;watch
 
 func (r *GitOpsClusterReconciler) Reconcile(ctx context.Context, req ctrl.Request) (ctrl.Result, error) {
 	_ = log.FromContext(ctx)
@@ -300,7 +301,7 @@ func (r *GitOpsClusterReconciler) Reconcile(ctx context.Context, req ctrl.Reques
 		failedAddonClusters := []string{}
 		for _, managedCluster := range managedClusters {
 			// Create AddOnDeploymentConfig with variables from GitOpsCluster spec
-			variables := r.buildAddonVariables(gitOpsCluster, serverAddress, serverPort)
+			variables := r.buildAddonVariables(gitOpsCluster)
 			if err := r.EnsureAddOnDeploymentConfig(ctx, managedCluster.Name, variables); err != nil {
 				klog.ErrorS(err, "Failed to ensure AddOnDeploymentConfig", "cluster", managedCluster.Name)
 				failedAddonClusters = append(failedAddonClusters, managedCluster.Name)
@@ -507,19 +508,9 @@ func (r *GitOpsClusterReconciler) ensurePlacementTolerations(ctx context.Context
 
 // buildAddonVariables builds the variables for AddOnDeploymentConfig from GitOpsCluster spec
 func (r *GitOpsClusterReconciler) buildAddonVariables(
-	gitOpsCluster *appsv1alpha1.GitOpsCluster,
-	serverAddress string,
-	serverPort string) map[string]string {
+	gitOpsCluster *appsv1alpha1.GitOpsCluster) map[string]string {
 
 	variables := make(map[string]string)
-
-	// Use discovered/configured server address and port
-	variables["ARGOCD_AGENT_SERVER_ADDRESS"] = serverAddress
-	variables["ARGOCD_AGENT_SERVER_PORT"] = serverPort
-
-	if gitOpsCluster.Spec.ArgoCDAgentAddon.Mode != "" {
-		variables["ARGOCD_AGENT_MODE"] = gitOpsCluster.Spec.ArgoCDAgentAddon.Mode
-	}
 
 	// Add namespace configuration
 	// AgentNamespace: where the ArgoCD CR will be deployed on the managed/spoke cluster

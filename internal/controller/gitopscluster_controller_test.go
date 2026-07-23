@@ -81,12 +81,10 @@ func TestBuildAddonVariables(t *testing.T) {
 	tests := []struct {
 		name          string
 		gitOpsCluster *appsv1alpha1.GitOpsCluster
-		serverAddress string
-		serverPort    string
 		wantVars      map[string]string
 	}{
 		{
-			name: "basic configuration",
+			name: "minimal configuration",
 			gitOpsCluster: &appsv1alpha1.GitOpsCluster{
 				ObjectMeta: metav1.ObjectMeta{
 					Name:      "test-cluster",
@@ -98,52 +96,7 @@ func TestBuildAddonVariables(t *testing.T) {
 					},
 				},
 			},
-			serverAddress: "argocd-server.argocd.svc",
-			serverPort:    "8080",
-			wantVars: map[string]string{
-				"ARGOCD_AGENT_SERVER_ADDRESS": "argocd-server.argocd.svc",
-				"ARGOCD_AGENT_SERVER_PORT":    "8080",
-				"ARGOCD_AGENT_MODE":           "managed",
-			},
-		},
-		{
-			name: "with autonomous mode",
-			gitOpsCluster: &appsv1alpha1.GitOpsCluster{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-cluster",
-					Namespace: "argocd",
-				},
-				Spec: appsv1alpha1.GitOpsClusterSpec{
-					ArgoCDAgentAddon: appsv1alpha1.ArgoCDAgentAddonSpec{
-						Mode: "autonomous",
-					},
-				},
-			},
-			serverAddress: "argocd-server.argocd.svc",
-			serverPort:    "8080",
-			wantVars: map[string]string{
-				"ARGOCD_AGENT_SERVER_ADDRESS": "argocd-server.argocd.svc",
-				"ARGOCD_AGENT_SERVER_PORT":    "8080",
-				"ARGOCD_AGENT_MODE":           "autonomous",
-			},
-		},
-		{
-			name: "minimal configuration",
-			gitOpsCluster: &appsv1alpha1.GitOpsCluster{
-				ObjectMeta: metav1.ObjectMeta{
-					Name:      "test-cluster",
-					Namespace: "argocd",
-				},
-				Spec: appsv1alpha1.GitOpsClusterSpec{
-					ArgoCDAgentAddon: appsv1alpha1.ArgoCDAgentAddonSpec{},
-				},
-			},
-			serverAddress: "argocd-server.argocd.svc",
-			serverPort:    "8080",
-			wantVars: map[string]string{
-				"ARGOCD_AGENT_SERVER_ADDRESS": "argocd-server.argocd.svc",
-				"ARGOCD_AGENT_SERVER_PORT":    "8080",
-			},
+			wantVars: map[string]string{},
 		},
 		{
 			name: "with custom namespaces",
@@ -160,14 +113,9 @@ func TestBuildAddonVariables(t *testing.T) {
 					},
 				},
 			},
-			serverAddress: "argocd-server.argocd.svc",
-			serverPort:    "8080",
 			wantVars: map[string]string{
-				"ARGOCD_AGENT_SERVER_ADDRESS": "argocd-server.argocd.svc",
-				"ARGOCD_AGENT_SERVER_PORT":    "8080",
-				"ARGOCD_AGENT_MODE":           "managed",
-				"ARGOCD_NAMESPACE":            "custom-argocd",
-				"ARGOCD_OPERATOR_NAMESPACE":   "custom-operator",
+				"ARGOCD_NAMESPACE":          "custom-argocd",
+				"ARGOCD_OPERATOR_NAMESPACE": "custom-operator",
 			},
 		},
 	}
@@ -179,7 +127,7 @@ func TestBuildAddonVariables(t *testing.T) {
 				Scheme: s,
 			}
 
-			got := r.buildAddonVariables(tt.gitOpsCluster, tt.serverAddress, tt.serverPort)
+			got := r.buildAddonVariables(tt.gitOpsCluster)
 
 			if len(got) != len(tt.wantVars) {
 				t.Errorf("buildAddonVariables() returned %d variables, want %d", len(got), len(tt.wantVars))

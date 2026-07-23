@@ -21,6 +21,21 @@ global:
   argoCDOperatorNamespace: argocd-operator-system
   argoCDNamespace: argocd
 
+# Hub ArgoCD installation. Disable when adopting a pre-existing argocd-operator-managed
+# Argo CD instance on the hub (with spec.argoCDAgent.principal already enabled). When
+# disabled, this chart still installs the GitOpsCluster controller, placement, and
+# ClusterManagementAddOn, but skips installing argocd-operator and the hub ArgoCD CR.
+hubArgoCD:
+  enabled: true
+
+# argocd-agent image shared by the hub principal (this chart's ArgoCD CR, when
+# hubArgoCD.enabled) and, by default, the managed-cluster agent (propagated via the
+# GitOpsCluster CR's spec.argoCDAgentAddon.agentImage). Keeping both on the same image
+# is required: mismatched principal/agent versions fail the argocd-agent version
+# handshake. Leave empty to fall back to whatever argocd-operator defaults to.
+argoCDAgent:
+  image: quay.io/argoprojlabs/argocd-agent:v0.9.0
+
 # GitOpsCluster settings (will be created in argocd namespace)
 gitOpsCluster:
   namespace: argocd

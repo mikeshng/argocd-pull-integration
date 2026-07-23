@@ -12,11 +12,23 @@ a copy of its manifests in two locations (which must stay in sync):
 | Location | Purpose |
 |----------|---------|
 | `charts/argocd-agent-addon/crds/argocd-operator-crds.yaml` | CRDs installed on the hub via Helm |
-| `charts/argocd-agent-addon/templates/argocd-operator/operator.yaml` | Operator deployment manifests (hub) |
-| `charts/argocd-agent-addon/templates/argocd-operator/argocd.yaml` | Hub ArgoCD CR (principal config) |
+| `charts/argocd-agent-addon/templates/argocd-operator/_operator-manifests.tpl` | Operator deployment manifests, shared partial (hub) |
+| `charts/argocd-agent-addon/templates/argocd-operator/operator.yaml` | Includes the partial above, gated by `.Values.hubArgoCD.enabled` |
+| `charts/argocd-agent-addon/templates/argocd-operator/argocd.yaml` | Hub ArgoCD CR (principal config), also gated by `.Values.hubArgoCD.enabled` |
 | `internal/addon/charts/argocd-agent-addon/crds/argocd-operator-crds.yaml` | CRDs installed on spokes via addon |
-| `internal/addon/charts/argocd-agent-addon/templates/operator.yaml` | Operator deployment manifests (spoke) |
-| `internal/addon/charts/argocd-agent-addon/templates/argocd.yaml` | Spoke ArgoCD CR (agent config) |
+| `internal/addon/charts/argocd-agent-addon/templates/_operator-manifests.tpl` | Operator deployment manifests, shared partial (spoke) |
+| `internal/addon/charts/argocd-agent-addon/templates/operator.yaml` | Includes the partial above, unconditionally |
+
+The spoke ArgoCD CR (agent config) is no longer templated by a chart at all - it's generated
+in Go (`internal/controller/argocd_cr_manifest_work.go`, `buildDefaultArgoCDCR`) and delivered
+to managed clusters via `ManifestWork` from the hub controller.
+
+Only `_operator-manifests.tpl` needs to stay byte-identical between hub and spoke (verified by
+`make verify-operator-chart-sync`) - it holds the actual Kubernetes manifests. The `operator.yaml`
+entrypoint files that `include` it are expected to differ: the hub one is wrapped in
+`{{- if .Values.hubArgoCD.enabled }}` so operators adopting a pre-existing hub Argo CD instance
+can skip installing a second one; the spoke one always installs unconditionally, since the
+addon has no equivalent "adopt existing" concept on managed clusters.
 
 ### What each file contains
 
@@ -130,9 +142,9 @@ with open('/tmp/operator-non-crd.yaml', 'w') as f:
 "
 ```
 
-### Step 4: Compare and update operator.yaml
+### Step 4: Compare and update _operator-manifests.tpl
 
-Compare the new manifests against our embedded `operator.yaml`. Focus on:
+Compare the new manifests against our embedded `_operator-manifests.tpl`. Focus on:
 
 1. **ClusterRole `argocd-operator-manager-role` rules** — this is where most RBAC
    changes happen between operator versions.
@@ -154,7 +166,7 @@ for d in kust_docs:
     if d and d.get('kind') not in ('CustomResourceDefinition', None):
         kust[f\"{d['kind']}/{d['metadata']['name']}\"] = d
 
-with open('internal/addon/charts/argocd-agent-addon/templates/operator.yaml') as f:
+with open('internal/addon/charts/argocd-agent-addon/templates/_operator-manifests.tpl') as f:
     content = f.read()
 content = content.replace('{{ .Values.global.argoCDOperatorNamespace }}', 'argocd-operator-system')
 content = content.replace('\"{{ .Values.operatorImage }}:{{ .Values.operatorImageTag }}\"', 'PLACEHOLDER_IMAGE')
@@ -177,7 +189,7 @@ if not (kust_keys - emb_keys) and not (emb_keys - kust_keys):
 "
 ```
 
-Manually update `operator.yaml` in both chart locations to match the new operator output.
+Manually update `_operator-manifests.tpl` in both chart locations to match the new operator output.
 
 **Important — preserve these intentional differences from upstream:**
 
@@ -201,18 +213,19 @@ Manually update `operator.yaml` in both chart locations to match the new operato
    `config/manager/kustomization.yaml`). We use a tag-based reference controlled
    by the Makefile's `ARGOCD_OPERATOR_IMAGE` variable.
 
-### Step 5: Update argocd.yaml (if needed)
+### Step 5: Update argocd.yaml and buildDefaultArgoCDCR (if needed)
 
 If the ArgoCD CR schema changed (new fields in `argoCDAgent`, `principal`, `agent`), update:
 - `charts/argocd-agent-addon/templates/argocd-operator/argocd.yaml` (hub/principal)
-- `internal/addon/charts/argocd-agent-addon/templates/argocd.yaml` (spoke/agent)
+- `internal/controller/argocd_cr_manifest_work.go`, `buildDefaultArgoCDCR` (spoke/agent,
+  generated in Go and delivered via ManifestWork - there is no spoke-side chart template for it)
 
 ### Step 6: Verify
 
 ```bash
-# Verify both operator.yaml files are in sync (ignoring helm templates)
-diff <(grep -v '{{' charts/argocd-agent-addon/templates/argocd-operator/operator.yaml) \
-     <(grep -v '{{' internal/addon/charts/argocd-agent-addon/templates/operator.yaml)
+# Verify both _operator-manifests.tpl files are in sync (ignoring helm templates)
+diff <(grep -v '{{' charts/argocd-agent-addon/templates/argocd-operator/_operator-manifests.tpl) \
+     <(grep -v '{{' internal/addon/charts/argocd-agent-addon/templates/_operator-manifests.tpl)
 
 # Verify CRD files are identical
 diff charts/argocd-agent-addon/crds/argocd-operator-crds.yaml \

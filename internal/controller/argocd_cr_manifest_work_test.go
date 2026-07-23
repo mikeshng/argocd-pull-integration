@@ -22,6 +22,7 @@ import (
 	"testing"
 
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
+	"k8s.io/apimachinery/pkg/apis/meta/v1/unstructured"
 	"k8s.io/apimachinery/pkg/runtime"
 	"k8s.io/apimachinery/pkg/types"
 	"k8s.io/client-go/kubernetes/scheme"
@@ -130,12 +131,12 @@ func TestInjectServerEndpoint(t *testing.T) {
 	}
 
 	tests := []struct {
-		name          string
-		raw           []byte
-		wantAddress   string
-		wantPort      string
-		wantErr       bool
-		checkPath     string // "structured" or "extraConfig"
+		name        string
+		raw         []byte
+		wantAddress string
+		wantPort    string
+		wantErr     bool
+		checkPath   string // "structured" or "extraConfig"
 	}{
 		{
 			name: "injects into empty client",
@@ -308,7 +309,7 @@ func TestBuildDefaultArgoCDCR(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			cr := r.buildDefaultArgoCDCR(tt.gitOpsCluster, tt.spokeArgoCDNamespace, tt.serverAddress, tt.serverPort)
+			cr := r.buildDefaultArgoCDCR(context.Background(), tt.gitOpsCluster, tt.spokeArgoCDNamespace, tt.serverAddress, tt.serverPort)
 
 			if cr.GetAPIVersion() != "argoproj.io/v1beta1" {
 				t.Errorf("Expected apiVersion argoproj.io/v1beta1, got %s", cr.GetAPIVersion())
@@ -349,6 +350,101 @@ func TestBuildDefaultArgoCDCR(t *testing.T) {
 			}
 			if client["mode"] != tt.wantMode {
 				t.Errorf("Expected mode %s, got %v", tt.wantMode, client["mode"])
+			}
+
+			_, hasDestinationBasedMapping := agent["destinationBasedMapping"]
+			if tt.wantMode == "autonomous" && hasDestinationBasedMapping {
+				t.Errorf("destinationBasedMapping must not be set for autonomous agents (argocd-agent rejects it)")
+			}
+			if tt.wantMode != "autonomous" && !hasDestinationBasedMapping {
+				t.Errorf("Expected destinationBasedMapping to be set for mode %s", tt.wantMode)
+			}
+		})
+	}
+}
+
+func TestBuildDefaultArgoCDCRAgentImageSync(t *testing.T) {
+	s := runtime.NewScheme()
+	_ = scheme.AddToScheme(s)
+	_ = appsv1alpha1.AddToScheme(s)
+
+	const hubNamespace = "image-sync-test"
+	const principalImage = "quay.io/argoprojlabs/argocd-agent:v0.9.0"
+
+	hubArgoCD := &unstructured.Unstructured{
+		Object: map[string]interface{}{
+			"apiVersion": "argoproj.io/v1beta1",
+			"kind":       "ArgoCD",
+			"metadata": map[string]interface{}{
+				"name":      "argocd",
+				"namespace": hubNamespace,
+			},
+			"spec": map[string]interface{}{
+				"argoCDAgent": map[string]interface{}{
+					"principal": map[string]interface{}{
+						"image": principalImage,
+					},
+				},
+			},
+		},
+	}
+
+	r := &GitOpsClusterReconciler{
+		Client: fake.NewClientBuilder().WithScheme(s).WithObjects(hubArgoCD).Build(),
+		Scheme: s,
+	}
+
+	tests := []struct {
+		name           string
+		annotations    map[string]string
+		wantImage      string
+		wantImageUnset bool
+	}{
+		{
+			name:      "no annotation - discovers and injects hub principal image",
+			wantImage: principalImage,
+		},
+		{
+			name:        "annotation false - discovers and injects hub principal image",
+			annotations: map[string]string{AnnotationDisableAgentImageSync: "false"},
+			wantImage:   principalImage,
+		},
+		{
+			name:           "annotation true - skips discovery, leaves image unset",
+			annotations:    map[string]string{AnnotationDisableAgentImageSync: "true"},
+			wantImageUnset: true,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			gitOpsCluster := &appsv1alpha1.GitOpsCluster{
+				ObjectMeta: metav1.ObjectMeta{
+					Name:        "gitops-cluster",
+					Namespace:   hubNamespace,
+					Annotations: tt.annotations,
+				},
+				Spec: appsv1alpha1.GitOpsClusterSpec{
+					ArgoCDAgentAddon: appsv1alpha1.ArgoCDAgentAddonSpec{},
+				},
+			}
+
+			cr := r.buildDefaultArgoCDCR(context.Background(), gitOpsCluster, "argocd", "10.0.0.1", "443")
+
+			image, found, err := unstructured.NestedString(cr.Object, "spec", "argoCDAgent", "agent", "image")
+			if err != nil {
+				t.Fatalf("unexpected error reading agent image: %v", err)
+			}
+
+			if tt.wantImageUnset {
+				if found {
+					t.Errorf("Expected spec.argoCDAgent.agent.image to be unset, got %q", image)
+				}
+				return
+			}
+
+			if !found || image != tt.wantImage {
+				t.Errorf("Expected spec.argoCDAgent.agent.image %q, got %q (found=%v)", tt.wantImage, image, found)
 			}
 		})
 	}

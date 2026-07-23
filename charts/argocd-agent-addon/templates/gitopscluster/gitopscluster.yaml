@@ -3,6 +3,16 @@ kind: GitOpsCluster
 metadata:
   name: {{ .Values.gitOpsCluster.name }}
   namespace: {{ .Values.gitOpsCluster.namespace }}
+  {{- if .Values.argoCDAgent.image }}
+  annotations:
+    # Not read by the controller directly - its only purpose is to change this resource's
+    # rendered content whenever argoCDAgent.image changes, so a `helm upgrade` that bumps the
+    # hub principal's image also triggers a GitOpsCluster reconcile (which then re-discovers
+    # the new principal image and propagates it to managed clusters). Without this, changing
+    # argoCDAgent.image only touches the hub ArgoCD CR - a resource the controller doesn't
+    # watch - so a helm upgrade alone would silently fail to propagate the version bump.
+    apps.open-cluster-management.io/hub-argocd-agent-image: {{ .Values.argoCDAgent.image | quote }}
+  {{- end }}
 spec:
   placementRef:
     apiVersion: cluster.open-cluster-management.io/v1beta1
@@ -38,11 +48,16 @@ spec:
           argoCDAgent:
             agent:
               enabled: true
+              {{- if .Values.argoCDAgent.image }}
+              image: {{ .Values.argoCDAgent.image }}
+              {{- end }}
               allowedNamespaces:
               - "*"
+              {{- if ne .Values.gitOpsCluster.mode "autonomous" }}
               destinationBasedMapping:
                 enabled: true
                 createNamespace: true
+              {{- end }}
               creds: "mtls:open-cluster-management:cluster:([^:]+):addon:argocd-agent"
               logLevel: "info"
               logFormat: "text"

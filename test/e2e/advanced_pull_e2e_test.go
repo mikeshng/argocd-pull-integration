@@ -650,6 +650,71 @@ spec:
 		})
 	})
 
+	Context("Agent Image Sync Control", func() {
+		const disableSyncAnnotation = "apps.open-cluster-management.io/disable-agent-image-sync"
+
+		It("should stop following the hub principal image once disabled, and resume once re-enabled", func() {
+			By("capturing the hub principal image and confirming the spoke agent currently matches it")
+			cmd := exec.Command("kubectl", "--context", hubContext,
+				"get", "argocd", "argocd",
+				"-n", argoCDNamespace,
+				"-o", "jsonpath={.spec.argoCDAgent.principal.image}")
+			principalImage, err := utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+			Expect(principalImage).NotTo(BeEmpty())
+
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "--context", cluster1Context,
+					"get", "argocd", "argocd",
+					"-n", argoCDNamespace,
+					"-o", "jsonpath={.spec.argoCDAgent.agent.image}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal(principalImage))
+			}).Should(Succeed())
+
+			By("annotating the GitOpsCluster to disable agent image sync")
+			cmd = exec.Command("kubectl", "--context", hubContext,
+				"annotate", "gitopscluster", "gitops-cluster",
+				"-n", argoCDNamespace,
+				disableSyncAnnotation+"=true", "--overwrite")
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("verifying the spoke ArgoCD CR's agent image field is no longer set")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "--context", cluster1Context,
+					"get", "argocd", "argocd",
+					"-n", argoCDNamespace,
+					"-o", "jsonpath={.spec.argoCDAgent.agent.image}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(BeEmpty())
+			}, 5*time.Minute, 5*time.Second).Should(Succeed())
+
+			By("re-enabling agent image sync")
+			cmd = exec.Command("kubectl", "--context", hubContext,
+				"annotate", "gitopscluster", "gitops-cluster",
+				"-n", argoCDNamespace,
+				disableSyncAnnotation+"-")
+			_, err = utils.Run(cmd)
+			Expect(err).NotTo(HaveOccurred())
+
+			By("verifying the spoke ArgoCD CR's agent image matches the hub principal image again")
+			Eventually(func(g Gomega) {
+				cmd := exec.Command("kubectl", "--context", cluster1Context,
+					"get", "argocd", "argocd",
+					"-n", argoCDNamespace,
+					"-o", "jsonpath={.spec.argoCDAgent.agent.image}")
+				output, err := utils.Run(cmd)
+				g.Expect(err).NotTo(HaveOccurred())
+				g.Expect(output).To(Equal(principalImage))
+			}, 5*time.Minute, 5*time.Second).Should(Succeed())
+
+			fmt.Fprintf(GinkgoWriter, "Agent image sync toggled off and back on, tracking hub principal image %s\n", principalImage)
+		})
+	})
+
 	Context("Addon Cleanup", func() {
 		It("should cleanup addon resources when placement is updated to remove clusters", func() {
 			By("recording initial state")

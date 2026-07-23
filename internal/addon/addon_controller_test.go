@@ -32,27 +32,12 @@ func TestArgoCDAgentAddonReconciler(t *testing.T) {
 		name              string
 		interval          int
 		operatorImage     string
-		serverAddress     string
-		serverPort        string
-		mode              string
 		wantIntervalValid bool
 	}{
 		{
 			name:              "default configuration",
 			interval:          60,
 			operatorImage:     "quay.io/operator:latest",
-			serverAddress:     "argocd-server.argocd.svc",
-			serverPort:        "8080",
-			mode:              "managed",
-			wantIntervalValid: true,
-		},
-		{
-			name:              "autonomous mode",
-			interval:          30,
-			operatorImage:     "quay.io/operator:latest",
-			serverAddress:     "argocd-server.argocd.svc",
-			serverPort:        "8080",
-			mode:              "autonomous",
 			wantIntervalValid: true,
 		},
 	}
@@ -60,13 +45,10 @@ func TestArgoCDAgentAddonReconciler(t *testing.T) {
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			r := &ArgoCDAgentAddonReconciler{
-				Client:                   fake.NewClientBuilder().WithScheme(s).Build(),
-				Scheme:                   s,
-				Interval:                 tt.interval,
-				OperatorImage:            tt.operatorImage,
-				ArgoCDAgentServerAddress: tt.serverAddress,
-				ArgoCDAgentServerPort:    tt.serverPort,
-				ArgoCDAgentMode:          tt.mode,
+				Client:        fake.NewClientBuilder().WithScheme(s).Build(),
+				Scheme:        s,
+				Interval:      tt.interval,
+				OperatorImage: tt.operatorImage,
 			}
 
 			if r.Interval != tt.interval {
@@ -74,15 +56,6 @@ func TestArgoCDAgentAddonReconciler(t *testing.T) {
 			}
 			if r.OperatorImage != tt.operatorImage {
 				t.Errorf("OperatorImage = %v, want %v", r.OperatorImage, tt.operatorImage)
-			}
-			if r.ArgoCDAgentServerAddress != tt.serverAddress {
-				t.Errorf("ServerAddress = %v, want %v", r.ArgoCDAgentServerAddress, tt.serverAddress)
-			}
-			if r.ArgoCDAgentServerPort != tt.serverPort {
-				t.Errorf("ServerPort = %v, want %v", r.ArgoCDAgentServerPort, tt.serverPort)
-			}
-			if r.ArgoCDAgentMode != tt.mode {
-				t.Errorf("Mode = %v, want %v", r.ArgoCDAgentMode, tt.mode)
 			}
 		})
 	}
